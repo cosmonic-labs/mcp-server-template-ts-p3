@@ -1,0 +1,17 @@
+[package]
+name = "mcp-http-test-host"
+version = "0.1.0"
+edition = "2024"
+publish = false
+[dependencies]
+wasmtime = { version = "=49.0.2", default-features = false, features = ["cranelift", "runtime", "std", "async", "component-model", "component-model-async"] }
+wasmtime-wasi = { version = "=49.0.2", default-features = false, features = ["p2", "p3"] }
+wasmtime-wasi-http = { version = "=49.0.2", default-features = false, features = ["p2", "p3"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+bytes = "1"
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+serde_json = "1"
+[profile.dev]
+debug = 0

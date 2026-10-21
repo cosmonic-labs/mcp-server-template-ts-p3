@@ -1,0 +1,10 @@
+package cosmonic:http-exchange;
+interface client {
+  use wasi:http/types@0.3.0.{request, error-code};
+  record reply { status: u16, headers: list<tuple<string, list<u8>>>, body: list<u8> }
+  resource exchange {
+    constructor(request: request);
+    send: async func(max-bytes: u32) -> result<reply, error-code>;
+    cancel: func();
+  }
+}

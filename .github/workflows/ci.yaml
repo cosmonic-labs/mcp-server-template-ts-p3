@@ -1,0 +1,90 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  WASMTIME_VERSION: 49.0.2
+  WASM_TOOLS_VERSION: 1.261.0
+  WAC_VERSION: 0.12.0
+
+jobs:
+  verify:
+    name: Build and test WASI p3 components
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install Rust toolchain
+        id: rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy --target wasm32-wasip2
+          rustup default stable
+          echo "version=$(rustc --version | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Cache Rust dependencies and build targets
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            adapter -> ../gen/adapter-target
+            test/boundary -> ../../gen/boundary-target
+            test/http-host -> ../../gen/http-host-target
+          cache-on-failure: false
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Restore component tools and patched compiler
+        id: tools
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            gen/tools
+            gen/componentize-qjs
+          key: component-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.version }}-${{ env.WASMTIME_VERSION }}-${{ env.WASM_TOOLS_VERSION }}-${{ env.WAC_VERSION }}-${{ hashFiles('scripts/build-compiler.sh', 'patches/componentize-qjs.patch') }}
+      - name: Install component tools
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: |
+          cargo install wasm-tools --version "$WASM_TOOLS_VERSION" --locked --root gen/tools
+          cargo install wac-cli --version "$WAC_VERSION" --locked --root gen/tools
+          curl -fsSL --retry 3 "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/wasmtime-v${WASMTIME_VERSION}-x86_64-linux.tar.xz" -o "$RUNNER_TEMP/wasmtime.tar.xz"
+          mkdir -p gen/tools/wasmtime
+          tar -xJf "$RUNNER_TEMP/wasmtime.tar.xz" --strip-components=1 -C gen/tools/wasmtime
+      - name: Add component tools to PATH
+        run: |
+          echo "$PWD/gen/tools/bin" >> "$GITHUB_PATH"
+          echo "$PWD/gen/tools/wasmtime" >> "$GITHUB_PATH"
+      - name: Build patched compiler
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: bash scripts/build-compiler.sh
+      - run: npm ci --no-audit --no-fund
+      - name: Verify protocol, parity, p3 boundary, and native OTEL
+        run: npm run test:all
+      - name: Check Rust formatting and lints
+        run: |
+          for manifest in adapter/Cargo.toml test/boundary/Cargo.toml test/http-host/Cargo.toml; do
+            cargo fmt --check --manifest-path "$manifest"
+          done
+          cargo clippy --locked --release --target wasm32-wasip2 --manifest-path adapter/Cargo.toml --target-dir gen/adapter-target -- -D warnings
+      - name: Save component tools and patched compiler
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.tools.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            gen/tools
+            gen/componentize-qjs
+          key: ${{ steps.tools.outputs.cache-primary-key }}

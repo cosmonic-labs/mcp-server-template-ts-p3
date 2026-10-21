@@ -1,0 +1,11 @@
+package cosmonic:p3-test;
+world driver {
+  import wasi:http/handler@0.3.0;
+  import wasi:clocks/monotonic-clock@0.3.0;
+  import wasi:clocks/system-clock@0.3.0;
+  export run: async func() -> string;
+  export exchange: async func(method: string, url: string, headers: string, body: string) -> string;
+  export probe: async func(method: string, url: string, headers: string, body: string) -> string;
+  export cancel: async func(method: string, url: string, headers: string, body: string) -> string;
+  export backpressure: async func(method: string, url: string, headers: string, body: string) -> string;
+}

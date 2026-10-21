@@ -1,0 +1,3 @@
+# Preserve whitespace in patch context and vendored WIT.
+patches/*.patch -whitespace
+wit/deps/** -whitespace

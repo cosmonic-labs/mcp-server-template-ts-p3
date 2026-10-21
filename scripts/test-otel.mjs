@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+const host = 'gen/http-host-target/debug/mcp-http-test-host';
+const cache = 'gen/otel-fixture.cwasm';
+execFileSync(host, ['dist/test.otel.wasm', '--precompile', cache], { stdio: 'inherit' });
+const request = ['POST', 'http://localhost/mcp', JSON.stringify([['content-type', 'application/json'], ['accept', 'application/json, text/event-stream']]),
+  JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'http_get', arguments: { url: 'https://fixture.test/echo' } } })];
+import { spawnSync } from 'node:child_process';
+const run = spawnSync(host, [cache], { input: JSON.stringify(request), encoding: 'utf8', timeout: 5000 });
+assert.equal(run.status, 0, run.stderr);
+assert.match(JSON.parse(JSON.parse(run.stdout)).body, /HTTP 200/);
+const spans = run.stderr.trim().split('\n').map(line => JSON.parse(line)).filter(row => row.native_otel === 'end');
+assert.deepEqual(spans.map(span => span.name).sort(), ['http.outbound', 'mcp.request', 'tool.http_get']);
+assert.ok(spans.every(span => span.trace_id === '11111111111111111111111111111111'));
+const root = spans.find(span => span.name === 'mcp.request');
+const tool = spans.find(span => span.name === 'tool.http_get');
+assert.equal(root.parent_span_id, '2222222222222222');
+assert.equal(tool.parent_span_id, root.span_id);
+assert.equal(spans.find(span => span.name === 'http.outbound').parent_span_id, tool.span_id);
+console.log('Native wasi:otel spans join the host trace and preserve request/tool/outbound parentage.');

@@ -1,0 +1,10 @@
+package cosmonic:mcp;
+world mcp-server {
+  import cosmonic:http-exchange/client;
+  import wasi:random/random@0.3.0;
+  import wasi:cli/environment@0.3.0;
+  import wasi:cli/stderr@0.3.0;
+  import wasi:clocks/system-clock@0.3.0;
+  import wasi:clocks/monotonic-clock@0.3.0;
+  export wasi:http/handler@0.3.0;
+}

@@ -1,0 +1,11 @@
+[package]
+name = "mcp-http-adapter"
+version = "0.1.0"
+edition = "2024"
+publish = false
+[lib]
+crate-type = ["cdylib"]
+[dependencies]
+wit-bindgen = { version = "=0.62.0", features = ["async", "async-spawn", "inter-task-wakeup"] }
+futures-channel = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }

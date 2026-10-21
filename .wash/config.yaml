@@ -1,0 +1,29 @@
+version: 0.1.0
+build:
+  command: npm run build
+  component_path: dist/mcp.wasm
+dev:
+  command: node scripts/build.mjs --desktop
+  component_path: gen/desktop/mcp.wasm
+workload:
+  labels:
+    app.kubernetes.io/name: mcp-off-shelf
+    app.kubernetes.io/version: "0.1.0"
+    mcp.ai/auth-type: none
+    mcp.ai/domain: template
+    mcp.ai/function-type: tools
+    mcp.ai/skills: "true"
+    mcp.ai/spec-version: "2026-07-28"
+    mcp.ai/statefulness: stateless
+    mcp.ai/transport: streamable-http
+  hostInterfaces:
+    - namespace: wasi
+      package: http
+      interfaces: [handler]
+      config:
+        host: mcp-off-shelf.localhost
+  environment:
+    config:
+      MCP_LOG_LEVEL: info
+      MCP_ALLOWED_HOSTS: mcp-off-shelf.localhost
+  allowedHosts: []
