@@ -35,6 +35,7 @@ spec:
           config:
             MCP_LOG_LEVEL: info
             MCP_ALLOWED_HOSTS: mcp-off-shelf.localhost.cosmonic.sh
+            MCP_REQUEST_TIMEOUT_MS: "30000"
             MCP_OUTBOUND_TIMEOUT_MS: "30000"
             MCP_OUTBOUND_MAX_BYTES: "4194304"
         allowedHosts: []

@@ -1,5 +1,6 @@
 wit_bindgen::generate!({ path: "../../gen/boundary-wit", world: "driver", generate_all });
 use serde_json::json;
+use std::{cell::RefCell, rc::Rc};
 use wasi::http::types::{ErrorCode, Fields, Method, Request, Response, Scheme};
 struct Driver;
 export!(Driver);
@@ -7,15 +8,17 @@ fn milliseconds() -> u64 {
     let now = wasi::clocks0_3_0::system_clock::now();
     now.seconds as u64 * 1000 + u64::from(now.nanoseconds) / 1_000_000
 }
-fn request(method: String, url: String, headers: String, body: String) -> Request {
-    let url: http::Uri = url.parse().unwrap();
+fn fields(headers: String) -> Fields {
     let headers: Vec<(String, String)> = serde_json::from_str(&headers).unwrap();
     let headers: Vec<_> = headers
         .into_iter()
         .filter(|(key, _)| !matches!(key.as_str(), "host" | "connection" | "content-length"))
         .map(|(key, value)| (key, value.into_bytes()))
         .collect();
-    let fields = Fields::from_list(&headers).unwrap();
+    Fields::from_list(&headers).unwrap()
+}
+fn request(method: String, url: String, headers: String, body: String) -> Request {
+    let fields = fields(headers);
     let (mut writer, reader) = wit_stream::new::<u8>();
     wit_bindgen::spawn_local(async move {
         let _ = writer.write_all(body.into_bytes()).await;
@@ -24,6 +27,10 @@ fn request(method: String, url: String, headers: String, body: String) -> Reques
     drop(trailers);
     let (request, completion) = Request::new(fields, Some(reader), trailers_reader, None);
     drop(completion);
+    configure(request, method, url)
+}
+fn configure(request: Request, method: String, url: String) -> Request {
+    let url: http::Uri = url.parse().unwrap();
     let method = match method.as_str() {
         "GET" => Method::Get,
         "HEAD" => Method::Head,
@@ -57,6 +64,9 @@ async fn exchange(method: String, url: String, headers: String, body: String) ->
     let response = wasi::http::handler::handle(request(method, url, headers, body))
         .await
         .unwrap();
+    collect(response, started).await
+}
+async fn collect(response: Response, started: u64) -> String {
     let headers_ms = milliseconds() - started;
     let status = response.get_status_code();
     let headers: Vec<_> = response
@@ -127,6 +137,63 @@ impl Guest for Driver {
             "".into(),
         )
         .await
+    }
+    async fn upload(method: String, url: String, headers: String, mode: String) -> String {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let observed = Rc::clone(&events);
+        let (mut writer, reader) = wit_stream::new::<u8>();
+        let (trailers, trailers_reader) = wit_future::new(|| Ok(None));
+        wit_bindgen::spawn_local(async move {
+            if mode == "trailers" {
+                let _ = writer.write_all(b"{}".to_vec()).await;
+                drop(writer);
+                wasi::clocks0_3_0::monotonic_clock::wait_for(120_000_000).await;
+                assert!(
+                    trailers.write(Ok(None)).await.is_err(),
+                    "trailer reader must close"
+                );
+                observed.borrow_mut().push("trailers-closed");
+            } else {
+                let delay = if mode == "trickle" {
+                    10_000_000
+                } else {
+                    120_000_000
+                };
+                for _ in 0..100 {
+                    wasi::clocks0_3_0::monotonic_clock::wait_for(delay).await;
+                    if !writer.write_all(vec![b' ']).await.is_empty() {
+                        observed.borrow_mut().push("body-closed");
+                        return;
+                    }
+                }
+                panic!("incoming body reader did not close");
+            }
+        });
+        let (input, completion) =
+            Request::new(fields(headers), Some(reader), trailers_reader, None);
+        drop(completion);
+        let started = milliseconds();
+        let response = wasi::http::handler::handle(configure(input, method, url))
+            .await
+            .unwrap();
+        let upload: serde_json::Value =
+            serde_json::from_str(&collect(response, started).await).unwrap();
+        wasi::clocks0_3_0::monotonic_clock::wait_for(150_000_000).await;
+        assert!(
+            !events.borrow().is_empty(),
+            "native input must close before the next request"
+        );
+        let health: serde_json::Value = serde_json::from_str(
+            &exchange(
+                "GET".into(),
+                "http://localhost/health".into(),
+                "[]".into(),
+                "".into(),
+            )
+            .await,
+        )
+        .unwrap();
+        json!({"upload": upload, "released": *events.borrow(), "health": health}).to_string()
     }
     async fn backpressure(method: String, url: String, headers: String, body: String) -> String {
         let response = wasi::http::handler::handle(request(method, url, headers, body))

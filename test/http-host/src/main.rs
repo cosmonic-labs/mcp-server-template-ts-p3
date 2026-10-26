@@ -45,6 +45,22 @@ impl Drop for StalledBody {
         eprintln!("{{\"fixture_event\":\"body-canceled\"}}");
     }
 }
+fn decode_query(value: &str) -> String {
+    let mut bytes = Vec::new();
+    let mut input = value.as_bytes().iter().copied();
+    while let Some(byte) = input.next() {
+        bytes.push(match byte {
+            b'+' => b' ',
+            b'%' => {
+                let high = char::from(input.next().unwrap()).to_digit(16).unwrap();
+                let low = char::from(input.next().unwrap()).to_digit(16).unwrap();
+                (high * 16 + low) as u8
+            }
+            byte => byte,
+        });
+    }
+    String::from_utf8(bytes).unwrap()
+}
 struct Fixture;
 impl WasiHttpHooks for Fixture {
     fn send_request(
@@ -83,6 +99,16 @@ impl WasiHttpHooks for Fixture {
                 tokio::time::sleep(std::time::Duration::from_millis(80)).await;
             }
             let body = match parts.uri.path() {
+                "/redirect-to" => {
+                    let params: std::collections::HashMap<_, _> = parts.uri.query().unwrap_or_default()
+                        .split('&').filter_map(|part| part.split_once('='))
+                        .collect();
+                    let status = params.get("status").unwrap().parse::<u16>().unwrap();
+                    let location = params.get("location").unwrap();
+                    let decoded = decode_query(location);
+                    reply = reply.status(status).header("location", decoded.as_str());
+                    b"redirect response".to_vec()
+                },
                 "/redirect" => { reply = reply.status(302).header("location", "/echo"); Vec::new() },
                 "/cross-origin" => { reply = reply.status(307).header("location", "https://other.fixture.test/echo"); Vec::new() },
                 "/redirect-loop" => { reply = reply.status(302).header("location", "/redirect-loop"); Vec::new() },
@@ -199,6 +225,7 @@ async fn main() -> wasmtime::Result<()> {
         &mut store,
         match args.get(2).map(String::as_str) {
             Some("--probe") => "probe",
+            Some("--upload") => "upload",
             Some("--cancel") => "cancel",
             Some("--backpressure") => "backpressure",
             _ => "exchange",

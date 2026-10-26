@@ -49,6 +49,51 @@ struct Adapter;
 export!(Adapter);
 impl Guest for Adapter {
     type Exchange = Exchange;
+    async fn consume_request(
+        request: Request,
+        max_bytes: u32,
+        timeout_ms: u32,
+    ) -> Result<Vec<u8>, ErrorCode> {
+        let timeout =
+            wasi::clocks0_3_0::monotonic_clock::wait_for(u64::from(timeout_ms) * 1_000_000);
+        match select(
+            Box::pin(timeout),
+            Box::pin(read_request(request, max_bytes)),
+        )
+        .await
+        {
+            Either::Left(((), pending)) => {
+                drop(pending);
+                Err(ErrorCode::ConnectionReadTimeout)
+            }
+            Either::Right((result, _)) => result,
+        }
+    }
+}
+async fn read_request(request: Request, max_bytes: u32) -> Result<Vec<u8>, ErrorCode> {
+    let (complete, complete_reader) = wit_future::new(|| Err(ErrorCode::ConnectionTerminated));
+    let (mut stream, trailers) = Request::consume_body(request, complete_reader);
+    let result = async {
+        let mut body = Vec::new();
+        loop {
+            let (_, chunk) = stream.read(Vec::with_capacity(64 * 1024)).await;
+            if chunk.is_empty() {
+                break;
+            }
+            if body.len() + chunk.len() > max_bytes as usize {
+                return Err(ErrorCode::HttpRequestBodySize(Some(u64::from(max_bytes))));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        trailers.await?;
+        Ok(body)
+    }
+    .await;
+    drop(stream);
+    let _ = complete
+        .write(result.as_ref().map(|_| ()).map_err(Clone::clone))
+        .await;
+    result
 }
 impl GuestExchange for Exchange {
     fn new(request: Request) -> Self {

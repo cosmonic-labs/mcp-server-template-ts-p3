@@ -114,8 +114,12 @@ or an upstream service.
 line and up to 4096 UTF-8 bytes, with a truncation marker. `http_request` supports
 methods, headers, text bodies, and follow/manual/error redirect policies. HTTP
 404 and other non-2xx responses retain their status and body. Network, policy,
-size, and timeout failures become tool errors. Cross-origin redirects remove
-credentials. Progress is emitted when a caller supplies a progress token.
+size, and timeout failures become tool errors. Automatic redirects stay on the
+original scheme, host, and port.
+Cross-origin or credential-bearing redirects are returned without contacting the
+destination, preserving custom API keys, cookies, and request bodies on the
+original origin. CDN redirects require an explicit request to that destination.
+Progress is emitted when a caller supplies a progress token.
 
 Write the operating playbook in [skills/server/SKILL.md](skills/server/SKILL.md),
 with supporting files under that directory. Build-time YAML parsing preserves
@@ -136,6 +140,7 @@ and index appear in `resources/list`. Unknown and traversal-shaped URIs fail.
 | --- | --- | --- |
 | `MCP_ALLOWED_HOSTS` | localhost, 127.0.0.1, ::1 | Comma-separated incoming authorities; `host` accepts any port, `host:port` is exact, `*` disables the guard |
 | `MCP_HTTP_GET_ALLOW_LOCAL` | unset | `true` or `1` permits local/private outbound targets for development; applies to both HTTP tools and redirects |
+| `MCP_REQUEST_TIMEOUT_MS` | 30000 | Whole incoming-body deadline, including trailers; expires with HTTP 408 |
 | `MCP_OUTBOUND_TIMEOUT_MS` | 30000 | Whole outbound exchange deadline, including body read |
 | `MCP_OUTBOUND_MAX_BYTES` | 4194304 | Buffered outbound response limit |
 | `MCP_KEEPALIVE_MS` | 15000 | SSE keepalive interval |
@@ -264,7 +269,8 @@ production component. Neither implements MCP.
 
 Tests cover both MCP eras, skills manifests and directory traversal, discovery,
 Host policy, SSRF including redirects and mapped addresses, body limits,
-configurable timeouts and size caps, status codes, Unicode, streaming progress
+configurable timeouts and size caps, stalled uploads and trailers, status codes,
+Unicode, streaming progress
 before completion, peer cancellation, response backpressure, and overlapping
 outbound calls on one native instance. The fixture uses p3 HTTP hooks with no
 p2 HTTP linker and no sockets. Native OTEL uses a separate composed artifact.
@@ -273,7 +279,9 @@ CI installs the pinned compiler patch and runs the same checks.
 [src/runtime.ts](src/runtime.ts) and [src/web.ts](src/web.ts) supply upstream Web
 Streams, AbortController, Fetch data classes, Buffer, URL, and secure UUIDs.
 [src/timers.ts](src/timers.ts) schedules SDK timers on p3 monotonic-clock waits;
-one shared short wait bounds retention after timers are cleared.
+one shared short wait bounds retention after timers are cleared. Callback
+exceptions and promise rejections are reported without stopping queued timers
+or intervals. The queue also isolates failures in error reporting.
 [src/future.ts](src/future.ts) handles QuickJS's explicit WIT future resources.
 [The HTTP bridge](src/component.ts) buffers incoming messages within the cap and
 streams responses; [outbound Fetch](src/fetch.ts) is buffered and policy checked.
@@ -284,6 +292,12 @@ needed because QuickJS import promises cannot cancel their native subtask.
 The final component exposes only standard WASI host imports; the adapter's
 control interface is linked internally.
 JCO and ponyfill internal paths are pinned and need review during upgrades.
+
+Incoming request bodies have a 4 MiB byte cap and a full receive deadline,
+including trailers. Deadline expiry returns HTTP 408 and drops the native input
+stream and trailer future. The composed adapter owns this read so a timeout
+cancels native work. Host-level header and connection limits remain useful at
+the ingress.
 
 This is not a complete browser/Node runtime: automatic HTTP decompression and
 full Web Crypto are absent. Persistent subscriptions, sampling/elicitation,

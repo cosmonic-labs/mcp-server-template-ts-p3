@@ -7,5 +7,6 @@ world driver {
   export exchange: async func(method: string, url: string, headers: string, body: string) -> string;
   export probe: async func(method: string, url: string, headers: string, body: string) -> string;
   export cancel: async func(method: string, url: string, headers: string, body: string) -> string;
+  export upload: async func(method: string, url: string, headers: string, mode: string) -> string;
   export backpressure: async func(method: string, url: string, headers: string, body: string) -> string;
 }

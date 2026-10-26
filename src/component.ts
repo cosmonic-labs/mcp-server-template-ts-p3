@@ -1,4 +1,5 @@
-import { readFuture, dropFuture } from './future.js';
+import { readFuture } from './future.js';
+import { consumeRequest } from 'cosmonic:http-exchange/client';
 import './fetch.js';
 import { Request as PonyfillRequest, Response } from './web.js';
 import { serve, toolNames } from './server.js';
@@ -39,8 +40,18 @@ export const handler = {
         request[Symbol.dispose]();
         return toWasi(new Response('Payload Too Large', { status: 413 }), span);
       }
-      const bytes = await requestBytes(request);
-      if (bytes === undefined) return toWasi(new Response('Payload Too Large', { status: 413 }), span);
+      let bytes: Uint8Array<ArrayBuffer>;
+      let timeout: number;
+      try { timeout = limit('MCP_REQUEST_TIMEOUT_MS', 30_000); }
+      catch (error) { request[Symbol.dispose](); throw error; }
+      try { bytes = new Uint8Array(await consumeRequest(request, maxRequestBytes, timeout)); }
+      catch (error) {
+        const payload = ((error as { payload?: unknown })?.payload ?? error) as { tag?: string } | undefined;
+        if (payload?.tag === 'HTTP-request-body-size') return toWasi(new Response('Payload Too Large', { status: 413 }), span);
+        if (payload?.tag === 'connection-read-timeout') return toWasi(new Response('Request Timeout', { status: 408 }), span);
+        if (payload?.tag) return toWasi(new Response('Invalid request body', { status: 400 }), span);
+        throw error;
+      }
       const lifetime = new AbortController();
       const response = await serve(new PonyfillRequest(url, {
         method: verb, headers, body: !['GET', 'HEAD'].includes(verb) && bytes.length ? bytes : undefined,
@@ -52,24 +63,6 @@ export const handler = {
     }
   },
 };
-async function requestBytes(request: WasiRequest): Promise<Uint8Array<ArrayBuffer> | undefined> {
-  const [body, trailers] = WasiRequest.consumeBody(request, Promise.resolve({ tag: 'ok', val: undefined }));
-  let readingTrailers = false;
-  try {
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
-      size += chunk.byteLength;
-      if (size > maxRequestBytes) return undefined;
-      chunks.push(chunk);
-    }
-    readingTrailers = true;
-    const end = await readFuture(trailers);
-    if (end.tag === 'err') throw new Error(`Request body failed: ${JSON.stringify(end.val)}`);
-    end.val?.[Symbol.dispose]();
-    return Buffer.concat(chunks);
-  } finally { if (!readingTrailers) dropFuture(trailers); }
-}
 function toWasi(response: globalThis.Response | InstanceType<typeof Response>, span: Span, cancel: () => void = () => {}) {
   const fields = Fields.fromList([...response.headers]
     .filter(([key]) => !['connection', 'keep-alive', 'transfer-encoding', 'content-length'].includes(key.toLowerCase()))

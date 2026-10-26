@@ -57,6 +57,9 @@ for (const mode of ['legacy', { pin: '2026-07-28' }]) {
       for (const uri of ['skill://mcp-off-shelf/../secret', 'skill://mcp-off-shelf/references/../SKILL.md', 'skill://mcp-off-shelf/references/%2e%2e/SKILL.md']) {
         await assert.rejects(client.readResource({ uri }), error => error.code === -32602);
       }
+      const privateRedirect = await client.callTool({ name: 'http_request', arguments: { url: 'https://fixture.test/private-redirect' } });
+      assert.equal(privateRedirect.structuredContent.status, 302);
+      assert.equal(privateRedirect.structuredContent.headers.location, 'http://127.0.0.1/internal');
       const templates = await client.listResourceTemplates();
       assert.equal(templates.resourceTemplates.length, 2);
       const now = await client.callTool({ name: 'current_time', arguments: {} });
@@ -64,7 +67,7 @@ for (const mode of ['legacy', { pin: '2026-07-28' }]) {
       const preview = await client.callTool({ name: 'http_get', arguments: { url: 'https://fixture.test/multibyte' } });
       assert.equal(preview.isError, undefined);
       assert.equal(preview.content[0].text, 'HTTP 200\n' + 'é'.repeat(2048) + '…[truncated]');
-      for (const url of ['http://127.0.0.1/', 'http://10.1.2.3/', 'http://[::1]/', 'http://[::ffff:127.0.0.1]/', 'http://169.254.169.254/', 'http://x.localhost/', 'http://0x7f000001/', 'https://fixture.test/private-redirect']) {
+      for (const url of ['http://127.0.0.1/', 'http://10.1.2.3/', 'http://[::1]/', 'http://[::ffff:127.0.0.1]/', 'http://169.254.169.254/', 'http://x.localhost/', 'http://0x7f000001/']) {
         const result = await client.callTool({ name: 'http_request', arguments: { url } });
         assert.equal(result.isError, true, url);
         assert.match(result.content[0].text, /local\/private/);
@@ -134,6 +137,32 @@ test('overlapping invocations on one native instance', async () => {
   }
 });
 
+test('overlapping clients with the same JSON-RPC id keep credentials and results isolated', async () => {
+  for (const protocol of ['2025-11-25', '2026-07-28']) {
+    const markers = ['TEST_CLIENT_A_SECRET', 'TEST_CLIENT_B_SECRET'];
+    const calls = markers.map(marker => ['POST', 'http://localhost/mcp', JSON.stringify([
+      ['content-type', 'application/json'], ['accept', 'application/json, text/event-stream'], ['mcp-protocol-version', protocol], ['mcp-method', 'tools/call'], ['mcp-name', 'http_request'],
+    ]), JSON.stringify({ jsonrpc: '2.0', id: 17, method: 'tools/call', params: {
+      ...(protocol === '2026-07-28' ? { _meta: {
+        'io.modelcontextprotocol/protocolVersion': protocol,
+        'io.modelcontextprotocol/clientInfo': { name: 'isolation-test', version: '1' },
+        'io.modelcontextprotocol/clientCapabilities': {},
+      } } : {}),
+      name: 'http_request', arguments: { url: `https://fixture.test/delayed?client=${marker}`, method: 'POST',
+        headers: { api_key: marker }, body: marker },
+    } })]);
+    const pending = exec(host, [cache, '--batch'], { timeout: 5000 });
+    pending.child.stdin.end(JSON.stringify(calls));
+    const { stdout } = await pending;
+    const responses = JSON.parse(stdout).map(JSON.parse);
+    for (let i = 0; i < responses.length; i++) {
+      assert.equal(responses[i].status, 200, responses[i].body);
+      assert.ok(responses[i].body.includes(markers[i]), responses[i].body);
+      assert.ok(!responses[i].body.includes(markers[1 - i]), responses[i].body);
+    }
+  }
+});
+
 test('p3 headers and progress frames arrive before a delayed tool result', async () => {
   const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
     name: 'http_request', arguments: { url: 'https://fixture.test/delayed' }, _meta: { progressToken: 'stream-probe' },
@@ -175,3 +204,17 @@ test('a peer that stops reading triggers the response deadline', async () => {
     assert.match(stderr, /Response stream stalled for 50 ms/);
   });
 });
+
+test('incoming body and trailer deadlines release native input before reuse', async () => withEnv({ MCP_REQUEST_TIMEOUT_MS: '40' }, async () => {
+  for (const mode of ['body', 'trickle', 'trailers']) {
+    const pending = exec(host, [cache, '--upload'], { timeout: 3000 });
+    pending.child.stdin.end(JSON.stringify(['POST', 'http://localhost/mcp', '[]', mode]));
+    const { stdout } = await pending;
+    const result = JSON.parse(JSON.parse(stdout));
+    assert.equal(result.upload.status, 408);
+    assert.equal(result.upload.body, 'Request Timeout');
+    assert.ok(result.upload.headersMs < 1000, JSON.stringify(result));
+    assert.deepEqual(result.released, [mode === 'trailers' ? 'trailers-closed' : 'body-closed']);
+    assert.equal(result.health.status, 200);
+  }
+}));

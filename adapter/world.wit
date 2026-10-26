@@ -1,5 +1,6 @@
 package cosmonic:http-adapter;
 world adapter {
   import wasi:http/client@0.3.0;
+  import wasi:clocks/monotonic-clock@0.3.0;
   export cosmonic:http-exchange/client;
 }

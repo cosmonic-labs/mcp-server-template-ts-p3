@@ -21,3 +21,11 @@ their status and body; transport, policy, and limit errors return `isError`.
 Incoming protocol messages are capped at 4 MiB. The server is stateless, supports
 MCP 2026-07-28 and legacy clients, and does not allocate sessions. Use the
 platform's trusted ingress for authorization.
+
+Automatic redirects stay on the original scheme, host, and port. Cross-origin
+or credential-bearing redirects return their original status and response
+without contacting the destination. CDN redirects require an explicit request.
+
+Incoming bodies and trailers must finish within `MCP_REQUEST_TIMEOUT_MS`
+(default 30000 ms). Stalled or trickled uploads receive HTTP 408; the native
+input is closed before the next request.

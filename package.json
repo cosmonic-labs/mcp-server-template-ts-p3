@@ -27,13 +27,14 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/types.mjs && tsc --noEmit",
-    "test": "node scripts/build.mjs --test && node --test test/component.test.mjs",
+    "test": "npm run test:timers && node scripts/build.mjs --test && node --test test/component.test.mjs",
     "serve": "wasmtime serve -Scli -Shttp -Sp3 --addr 127.0.0.1:8080 dist/mcp.wasm",
     "test:boundary": "npm run build && node scripts/test-boundary.mjs",
     "test:outbound": "node scripts/build.mjs --test && node scripts/test-outbound.mjs",
     "build:compiler": "bash scripts/build-compiler.sh",
     "build:otel": "node scripts/build.mjs --otel",
-    "test:all": "npm run check && node scripts/build.mjs --test --otel && node --test test/component.test.mjs test/manifests.test.mjs && node scripts/test-outbound.mjs && node scripts/test-boundary.mjs && node scripts/test-otel.mjs",
-    "test:desktop": "node scripts/test-desktop.mjs"
+    "test:all": "npm run check && npm run test:timers && node scripts/build.mjs --test --otel && node --test test/component.test.mjs test/manifests.test.mjs && node scripts/test-outbound.mjs && node scripts/test-boundary.mjs && node scripts/test-otel.mjs",
+    "test:desktop": "node scripts/test-desktop.mjs",
+    "test:timers": "node --experimental-strip-types --test test/timers.test.mjs"
   }
 }

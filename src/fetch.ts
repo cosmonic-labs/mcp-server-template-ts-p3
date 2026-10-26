@@ -36,6 +36,7 @@ async function perform(input: RequestInfo | URL, init: RequestInit | undefined, 
   const request = new Request(input, { ...init, signal: init?.signal ?? undefined });
   if (request.signal.aborted) throw Object.assign(new Error('Request aborted'), { name: 'AbortError' });
   let url = new URL(request.url);
+  const origin = url.origin;
   let method = request.method;
   let body = new Uint8Array(await request.arrayBuffer());
   if (body.byteLength > maxRequestBytes) throw new RangeError('HTTP request exceeds 4 MiB');
@@ -93,12 +94,12 @@ async function perform(input: RequestInfo | URL, init: RequestInit | undefined, 
       const location = response.headers.get('location');
       if (!redirects.has(reply.status) || !location || request.redirect === 'manual') return response as unknown as globalThis.Response;
       if (request.redirect === 'error') throw new TypeError('HTTP redirect rejected');
+      let next: URL;
+      try { next = new URL(location, url); }
+      catch { return response as unknown as globalThis.Response; }
+      // Headers and bodies stay on the original origin.
+      if (next.origin !== origin || next.username || next.password) return response as unknown as globalThis.Response;
       if (count === 5) throw new TypeError('Too many HTTP redirects');
-      const next = new URL(location, url);
-      if (next.origin !== url.origin) {
-        headers.delete('authorization');
-        headers.delete('cookie');
-      }
       if ((reply.status === 303 && method !== 'HEAD') || ([301, 302].includes(reply.status) && method === 'POST')) {
         method = 'GET';
         body = new Uint8Array();
